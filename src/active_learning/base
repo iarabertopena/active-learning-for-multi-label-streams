@@ -1,0 +1,17 @@
+class ActiveLearningStrategy:
+
+    def __init__(self):
+
+        self.total_seen = 0
+        self.total_queried = 0
+
+    def query(
+        self,
+        x=None,
+        y_true=None,
+        y_pred=None,
+        probabilities=None,
+        committee_predictions=None,
+        committee_probabilities=None
+    ):
+        raise NotImplementedError
