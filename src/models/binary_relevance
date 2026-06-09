@@ -18,14 +18,14 @@ class BinaryRelevance:
 
         predictions = []
 
+        temp_stream = NumpyStream(
+             X=np.array([x]),
+             y=np.array([0])
+          )
+
+        instance = temp_stream.next_instance()
+
         for model in self.models:
-
-            temp_stream = NumpyStream(
-                X=np.array([x]),
-                y=np.array([0])
-            )
-
-            instance = temp_stream.next_instance()
 
             pred = model.predict(instance)
 
@@ -41,14 +41,14 @@ class BinaryRelevance:
 
         probabilities = []
 
+        temp_stream = NumpyStream(
+            X=np.array([x]),
+            y=np.array([0])
+        )
+        
+        instance = temp_stream.next_instance()
+
         for model in self.models:
-
-            temp_stream = NumpyStream(
-                X=np.array([x]),
-                y=np.array([0])
-            )
-
-            instance = temp_stream.next_instance()
 
             proba = model.predict_proba(instance)
 
