@@ -44,11 +44,11 @@ class Committee:
 
         return probabilities
 
-    def train(self, x, y):
+    def train(self, x, y, label_mask=None):
 
         for model in self.models:
 
-            model.train(x, y)
+            model.train(x, y, label_mask=label_mask)
 
 def compute_vote_entropy(predictions):
 
