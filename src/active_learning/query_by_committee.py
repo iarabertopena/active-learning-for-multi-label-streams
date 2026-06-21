@@ -84,6 +84,7 @@ class QueryByCommittee(ActiveLearningStrategy):
         super().__init__()
 
         self.threshold = threshold
+        self.budget = budget
         self.warmup = warmup
 
     def query(
@@ -98,6 +99,10 @@ class QueryByCommittee(ActiveLearningStrategy):
 
         self.total_seen += 1
 
+        # orçamento esgotado
+        if self.total_queried >= self.budget_limit:
+            return False
+            
         # warm-up
         if self.total_seen <= self.warmup:
 
