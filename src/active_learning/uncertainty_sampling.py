@@ -18,6 +18,7 @@ class UncertaintySampling(ActiveLearningStrategy):
         super().__init__()
 
         self.threshold = threshold
+        self.budget = budget
 
     def query(
         self,
@@ -30,10 +31,12 @@ class UncertaintySampling(ActiveLearningStrategy):
     ):
 
         self.total_seen += 1
+        
+        # orçamento esgotado
+        if self.total_queried >= self.budget_limit:
+            return False
 
-        uncertainty = compute_uncertainty(
-            probabilities
-        )
+        uncertainty = compute_uncertainty(probabilities)
 
         if uncertainty >= self.threshold:
 
