@@ -38,7 +38,7 @@ BLOCK_SIZES = {
 ### Função para criar um novo WELM
 def create_welm(
     number_neurons=1000,
-    activation="tanh",
+    activation="sigmoid",
     C=1.0,
     weight_method="wei-1"
 ):
@@ -79,7 +79,7 @@ class ClassifierChain:
 
             model = self.base_model_fn()
 
-            y_label = Y_ordered[:, i]#.reshape(-1,1)
+            y_label = Y_ordered[:, i].reshape(-1,1)
 
             model.fit(
                 X_chain,
@@ -111,7 +111,18 @@ class ClassifierChain:
 
             prob = np.asarray(prob)
 
-            prob = prob[:,1]
+            # WELM binário no OMAL deve retornar (n_samples, 1)
+            if prob.ndim == 2 and prob.shape[1] == 1:
+                prob = prob[:, 0]
+
+            # Caso algum classificador retorne duas probabilidades
+            elif prob.ndim == 2 and prob.shape[1] == 2:
+                prob = prob[:, 1]
+
+            else:
+                raise ValueError(
+                    f"Unexpected probability shape: {prob.shape}"
+                )
 
             predictions.append(prob)
 
@@ -123,20 +134,6 @@ class ClassifierChain:
                     pred
                 ]
             )
-            '''
-            prob = clf.predict_proba(X_chain)
-            print("shape:", np.asarray(prob).shape)
-            print(prob[:5])
-
-            # TensorFlow -> numpy
-            if hasattr(prob, "numpy"):
-                prob = prob.numpy()
-
-            prob = np.asarray(prob)
-
-            if prob.ndim == 2:
-                prob = prob.ravel()
-            '''
 
         predictions = np.column_stack(predictions)
 
@@ -158,7 +155,7 @@ class OMAL:
     def __init__(
         self,
         number_neurons=1000,
-        activation="tanh",
+        activation="sigmoid",
         C=1.0,
         weight_method="wei-1",
         lambda_=0.5,
@@ -445,7 +442,16 @@ class OMAL:
             )
         )
 
-        self.history["f1"].append(
+        self.history["f1_macro"].append(
+            f1_score(
+                y_true,
+                y_pred,
+                average="macro",
+                zero_division=0
+            )
+        )
+
+        self.history["f1_micro"].append(
             f1_score(
                 y_true,
                 y_pred,
@@ -453,7 +459,7 @@ class OMAL:
                 zero_division=0
             )
         )
-
+        
         self.history["queries"].append(queries)
 
         self.history["evaluated"].append(evaluated)
@@ -559,45 +565,6 @@ def run_experiment_omal(dataset_name, random_seed=None):
         # Retrain OMAL (Steps 17-20)
         model.fit(X_labeled, Y_labeled)
 
-        ###################################
-        # Prediction before retraining
-        pred_before = model.predict(X_test[:5])
-
-        # Retrain OMAL
-        model.fit(
-            X_labeled,
-            Y_labeled
-        )
-
-        _, prob = model._predict_chain(X_test[:10])
-        print(prob)
-
-        print(
-            "Probability mean:",
-            prob.mean()
-        )
-
-        print(
-            "Probability std:",
-            prob.std()
-        )
-
-        # Prediction after retraining
-        pred_after = model.predict(X_test[:5])
-
-
-        print("Before:")
-        print(pred_before)
-
-        print("After:")
-        print(pred_after)
-
-        print(
-            "Changed predictions:",
-            np.mean(pred_before != pred_after)
-        )
-        ###################################
-
         # Evaluate on fixed test set
         Y_test_pred = model.predict(X_test)
 
@@ -629,10 +596,17 @@ def run_experiment_omal(dataset_name, random_seed=None):
         np.all(Y_test == Y_pred, axis=1)
     )
 
-    test_f1 = f1_score(
+    test_f1_macro = f1_score(
         Y_test,
         Y_pred,
         average="macro",
+        zero_division=0
+    )
+
+    test_f1_micro = f1_score(
+        Y_test,
+        Y_pred,
+        average="micro",
         zero_division=0
     )
 
@@ -642,7 +616,8 @@ def run_experiment_omal(dataset_name, random_seed=None):
     results = {
         "Hamming Loss": test_hamming,
         "Exact Match": test_exact,
-        "F1-score": test_f1,
+        "F1 Macro": test_f1_macro,
+        "F1 Micro": test_f1_micro,
         "Execution Time (s)": end_time - start_time,
         "Memory Usage (MB)": max(0, memory_after - memory_before),
         "Queried Instances": total_queried,
@@ -660,4 +635,4 @@ if __name__ == "__main__":
     #for dataset in BLOCK_SIZES:
 
     #run_experiment_omal(dataset_name=dataset, random_seed=0)
-    run_experiment_omal(dataset_name="yeast", random_seed=0)
+    run_experiment_omal(dataset_name="emotions", random_seed=0)
