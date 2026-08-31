@@ -1,0 +1,119 @@
+{
+    "dataset": "flags",
+    "strategy": "Random",
+    "mode": "online",
+    "budget": 0.1,
+    "repetitions": 5,
+    "runs": [
+        {
+            "queries": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                2,
+                2,
+                2,
+                2
+            ],
+            "query_positions": [
+                57.69,
+                61.54
+            ],
+            "query_indices": [
+                14,
+                15
+            ]
+        },
+        {
+            "queries": [
+                0,
+                1,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+            ],
+            "query_positions": [
+                11.54,
+                23.08
+            ],
+            "query_indices": [
+                2,
+                5
+            ]
+        },
+        {
+            "queries": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                2,
+                2,
+                2
+            ],
+            "query_positions": [
+                7.69,
+                76.92
+            ],
+            "query_indices": [
+                1,
+                19
+            ]
+        },
+        {
+            "queries": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+            ],
+            "query_positions": [
+                34.62,
+                42.31
+            ],
+            "query_indices": [
+                8,
+                10
+            ]
+        },
+        {
+            "queries": [
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+                2,
+                2,
+                2,
+                2
+            ],
+            "query_positions": [
+                30.77,
+                65.38
+            ],
+            "query_indices": [
+                7,
+                16
+            ]
+        }
+    ]
+}
