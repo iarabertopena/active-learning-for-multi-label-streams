@@ -561,13 +561,13 @@ class UncertaintySampling(ActiveLearningStrategy):
         uncertainty = compute_uncertainty(probabilities)
 
         threshold = self.adaptive_threshold.get_threshold()
-
+        '''
         print(
             f"Seen={self.total_seen} | "
             f"Threshold={threshold:.4f} | "
             f"Uncertainty={uncertainty:.4f}"
         )
-        
+        '''       
         if uncertainty >= threshold:
             self.total_queried += 1
         
@@ -706,14 +706,14 @@ class QueryByCommittee(ActiveLearningStrategy):
         #print(f"Seen={self.total_seen} | "f"Disagreement={disagreement:.4f}")
 
         threshold = self.adaptive_threshold.get_threshold()
-
+        '''
         print(
             f"Seen={self.total_seen} | "
             f"Threshold={threshold:.10f} | "
             f"Disagreement={disagreement:.10f} | "
             f"Query={disagreement >= threshold}"
         )
-
+        '''
         if disagreement >= threshold:
             self.total_queried += 1
 
@@ -836,6 +836,103 @@ def compute_jkdn(x, y, X_history, Y_history, k=5):
     jkdn = np.mean(jaccard_distances)
 
     return jkdn
+
+def compute_cls(y, label_counts, n_instances):
+    """
+    Calcula o Critical Label Scarcity (CLS) de uma instância.
+
+    CLS(x_i) =
+        max_{y_j in Y_i} [-log P(y_j)] / log(N)
+
+    onde:
+        P(y_j) = count(y_j) / N
+
+    As estatísticas representam somente as instâncias
+    conhecidas antes da instância atual.
+    """
+
+    y = np.asarray(y)
+
+    # Não há histórico de labels conhecido
+    if n_instances <= 1:
+        return None
+
+    # Não há nenhuma label positiva na instância
+    positive_labels = np.where(y == 1)[0]
+
+    if len(positive_labels) == 0:
+        return 0.0
+
+    cls_values = []
+
+    for label in positive_labels:
+
+        count = label_counts[label]
+
+        # A label presente na instância deveria ter aparecido pelo menos uma vez no histórico.
+        if count <= 0:
+            continue
+
+        probability = count / n_instances
+
+        cls = (
+            -np.log(probability)
+            / np.log(n_instances)
+        )
+
+        cls_values.append(cls)
+
+    if len(cls_values) == 0:
+        return None
+
+    return max(cls_values)
+
+def compute_cb(y, class_counts, n_instances):
+    """
+    Calcula o Class Balance (CB) para cada label binária.
+
+    CB(x) = P(t(x)) - 1 / |Y|
+
+    No caso per-label, cada label é tratada como um problema
+    binário, portanto |Y| = 2.
+
+    Parameters
+    ----------
+    y : array-like
+        Vetor de labels da instância atual (0 ou 1).
+    class_counts : ndarray
+        Contagem das classes 0 e 1 para cada label.
+        Shape: (n_labels, 2).
+    n_instances : int
+        Número de instâncias utilizadas nas estatísticas.
+
+    Returns
+    -------
+    cb_values : ndarray or None
+        Valor de CB para cada label.
+    """
+    y = np.asarray(y)
+
+    if n_instances <= 1:
+        return None
+
+    cb_values = np.zeros(len(y), dtype=float)
+
+    for label, observed_class in enumerate(y):
+        observed_class = int(observed_class)
+
+        count = class_counts[label, observed_class]
+        probability = count / n_instances
+
+        cb_values[label] = probability - 0.5
+        #cb_values[label] = 0.5 - probability
+
+        print(
+            f"CB | label={label} | class={observed_class} | "
+            f"p={probability:.4f} | CB={cb_values[label]:.4f}"
+        )
+
+    return cb_values
 
 class ClusterManager:
 
@@ -968,6 +1065,14 @@ class ClusterHardness(ActiveLearningStrategy):
 
         self.X_history = []
         self.Y_history = []
+
+        # Estatísticas agregadas usadas pelo CLS global
+        self.label_counts = None
+        self.n_instances = 0
+
+        # Estatísticas usadas pelo CB per-label
+        self.class_counts = None
+        self.cb_n_instances = 0
         
         '''
         GLOBAL:
@@ -1058,6 +1163,36 @@ class ClusterHardness(ActiveLearningStrategy):
                 )
 
                 self.cluster_counts[label][cluster_id] += 1
+    
+    def update_cls_statistics(self, y_true):
+        """
+        Atualiza as estatísticas agregadas usadas pelo CLS.
+
+        A atualização ocorre somente depois que o labelset
+        verdadeiro da instância já foi obtido.
+        """
+
+        y_true = np.asarray(y_true)
+
+        if self.label_counts is None:
+            self.label_counts = np.zeros(len(y_true), dtype=int)
+
+        self.label_counts += y_true
+        self.n_instances += 1
+
+    def update_cb_statistics(self, y_true):
+        y_true = np.asarray(y_true)
+
+        if self.class_counts is None:
+            self.class_counts = np.zeros(
+                (len(y_true), 2),
+                dtype=int
+            )
+
+        for label, observed_class in enumerate(y_true):
+            self.class_counts[label, int(observed_class)] += 1
+
+        self.cb_n_instances += 1
 
     def get_hardness(
         self,
@@ -1140,7 +1275,7 @@ class ClusterHardness(ActiveLearningStrategy):
 
             # guarda o cluster usado na decisão
             self.last_cluster_id = cluster_info
-
+        
             print(
                 f"Seen={self.total_seen} | "
                 f"Cluster={cluster_info} | "
@@ -1185,38 +1320,37 @@ class ClusterHardness(ActiveLearningStrategy):
         # GLOBAL:
         if self.cluster_manager.mode == "global":
 
-            # calcula o JkDN da instância
-            jkdn = compute_jkdn(
-                x=x,
+            # Calcula o CLS
+            cls = compute_cls(
                 y=y_true,
-                X_history=self.X_history,
-                Y_history=self.Y_history,
-                k=self.k
+                label_counts=self.label_counts,
+                n_instances=self.n_instances
             )
 
-            if jkdn is None:
+            if cls is None:
                 return
 
             cluster_id = self.last_cluster_id
 
             self.update_hardness(
                 cluster_id,
-                jkdn
+                cls
             )
+
+            # Somente depois de calcular o CLS, incorpora a instância às estatísticas conhecidas
+            self.update_cls_statistics(y_true)
 
         # PER_LABEL:
         else:
 
-            # calcula o kDN da instância
-            kdn_values = compute_kdn(
-                x=x,
+            # Calcula o CB
+            cb_values = compute_cb(
                 y=y_true,
-                X_history=self.X_history,
-                Y_history=self.Y_history,
-                k=self.k
+                class_counts=self.class_counts,
+                n_instances=self.cb_n_instances
             )
 
-            if kdn_values is None:
+            if cb_values is None:
                 return
 
             cluster_ids = self.last_cluster_ids
@@ -1224,10 +1358,13 @@ class ClusterHardness(ActiveLearningStrategy):
             for label, cluster_id in enumerate(cluster_ids):
                 self.update_hardness(
                     cluster_id,
-                    kdn_values[label],
+                    cb_values[label],
                     label=label
                 )
-        
+
+            # Somente depois de calcular o CB, incorpora a instância às estatísticas conhecidas
+            self.update_cb_statistics(y_true)
+
         # Depois de calcular a métrica, a instância passa a fazer parte do histórico conhecido
         self.X_history.append(x)
         self.Y_history.append(y_true)
@@ -1586,6 +1723,14 @@ class PoolClusterHardness(PoolBasedStrategy):
         self.X_history = []
         self.Y_history = []
 
+        # Estatísticas usadas pelo CLS global
+        self.label_counts = None
+        self.n_instances = 0
+
+        # Estatísticas usadas pelo CB per-label
+        self.class_counts = None
+        self.cb_n_instances = 0
+
     def update_hardness(
         self,
         cluster_id,
@@ -1674,58 +1819,106 @@ class PoolClusterHardness(PoolBasedStrategy):
         x,
         y_true
     ):
+        print("\n--- UPDATE POOL CHS ---")
+        print("Modo:", self.cluster_manager.mode)
+        print("y_true:", y_true)
+
+        if self.cluster_manager.mode == "global":
+            print("Antes:")
+            print("  n_instances:", self.n_instances)
+            print("  label_counts:", self.label_counts)
+
+        else:
+            print("Antes:")
+            print("  cb_n_instances:", self.cb_n_instances)
+            print("  class_counts:\n", self.class_counts)
 
         if len(self.X_history) == 0:
             self.X_history.append(x)
             self.Y_history.append(y_true)
             return
 
-        # GLOBAL -> JkDN
+        # GLOBAL -> CLS
         if self.cluster_manager.mode == "global":
 
-            jkdn = compute_jkdn(
-                x=x,
+            cls = compute_cls(
                 y=y_true,
-                X_history=self.X_history,
-                Y_history=self.Y_history,
-                k=self.k
+                label_counts=self.label_counts,
+                n_instances=self.n_instances
             )
 
-            if jkdn is not None:
+            if cls is not None:
 
                 cluster_id = self.cluster_manager.get_cluster(x)
 
                 self.update_hardness(
                     cluster_id,
-                    jkdn
+                    cls
                 )
 
-        # PER_LABEL -> kDN
+            # Atualiza as estatísticas somente depois de calcular a dificuldade da instância
+            self.update_cls_statistics(y_true)
+
+        # PER_LABEL -> CB
         else:
 
-            kdn_values = compute_kdn(
-                x=x,
+            cb_values = compute_cb(
                 y=y_true,
-                X_history=self.X_history,
-                Y_history=self.Y_history,
-                k=self.k
+                class_counts=self.class_counts,
+                n_instances=self.cb_n_instances
             )
 
-            if kdn_values is not None:
+            if cb_values is not None:
 
                 cluster_ids = self.cluster_manager.get_cluster(x)
 
                 for label, cluster_id in enumerate(cluster_ids):
+                    # CB original: P(t(x)) - 0.5; invertido para alinhar maior valor à maior hardness
+                    hardness = -cb_values[label] 
 
                     self.update_hardness(
                         cluster_id,
-                        kdn_values[label],
+                        cb_values[label],
                         label=label
                     )
 
+            # Atualiza as estatísticas somente depois de calcular a dificuldade da instância
+            self.update_cb_statistics(y_true)
+
+            if self.cluster_manager.mode == "global":
+
+                print("Depois:")
+                print("  n_instances:", self.n_instances)
+                print("  label_counts:", self.label_counts)
+
+            else:
+
+                print("Depois:")
+                print("  cb_n_instances:", self.cb_n_instances)
+                print("  class_counts:\n", self.class_counts)
+
+            print("Hardness:", self.hardness)
+            print("------------------------")
+    
         # Adiciona a instância ao histórico
+        # (mantem o histórico por enquanto, para preservar a estrutura original)
         self.X_history.append(x)
         self.Y_history.append(y_true)
+
+    def update_cls_statistics(self, y_true):
+
+        for label, value in enumerate(y_true):
+            if value == 1:
+                self.label_counts[label] += 1
+
+        self.n_instances += 1
+
+    def update_cb_statistics(self, y_true):
+
+        for label, value in enumerate(y_true):
+            self.class_counts[label, int(value)] += 1
+
+        self.cb_n_instances += 1
 
     def query_pool(self, pool):
 
@@ -2152,6 +2345,14 @@ def run_experiment(
             strategy.X_history = []
             strategy.Y_history = []
 
+             # Estatísticas iniciais para o CLS
+            strategy.label_counts = np.zeros(Y_train.shape[1], dtype=int)
+            strategy.n_instances = 0
+
+            # Estatísticas iniciais para o CB
+            strategy.class_counts = np.zeros((Y_train.shape[1], 2), dtype=int)
+            strategy.cb_n_instances = 0
+
             for i in range(len(X_train)):
                 x_train = X_train[i]
                 y_train = Y_train[i]
@@ -2163,40 +2364,48 @@ def run_experiment(
                 # Obtém o(s) cluster(s) da instância
                 cluster_info = strategy.cluster_manager.get_cluster(x_train)
 
-                # GLOBAL: calcula o JkDN para cada instância
+                # GLOBAL: calcula o CLS para a instância
                 if strategy.cluster_manager.mode == "global":
-                    jkdn = compute_jkdn(
-                        x=x_train,
+                    cls = compute_cls(
                         y=y_train,
-                        X_history=X_history,
-                        Y_history=Y_history,
-                        k=strategy.k
+                        label_counts=strategy.label_counts,
+                        n_instances=strategy.n_instances
                     )
+
+                    if cls is not None:
+                        '''
+                        for cluster_id in cluster_info:
+                            strategy.update_hardness(
+                                cluster_id,
+                                cls
+                            )
+                        '''
                     
-                    if jkdn is not None:
                         strategy.update_hardness(
                             cluster_info,
-                            jkdn
+                            cls
                         )
 
-                # PER_LABEL: calcula o kDN para cada label da instância
+                    strategy.update_cls_statistics(y_train)
+
+                # PER_LABEL: calcula o CB para cada label da instância
                 else:
-                    kdn_values = compute_kdn(
-                        x=x_train,
+                    cb_values = compute_cb(
                         y=y_train,
-                        X_history=X_history,
-                        Y_history=Y_history,
-                        k=strategy.k
+                        class_counts=strategy.class_counts,
+                        n_instances=strategy.cb_n_instances
                     )
 
-                    if kdn_values is not None:
+                    if cb_values is not None:
                         for label, cluster_id in enumerate(cluster_info):
 
                             strategy.update_hardness(
                                 cluster_id,
-                                kdn_values[label],
+                                cb_values[label],
                                 label=label
                             )
+                        
+                    strategy.update_cb_statistics(y_train)
 
 
             # Todo o conjunto inicial passa a ser o histórico conhecido
