@@ -1356,9 +1356,16 @@ class ClusterHardness(ActiveLearningStrategy):
             cluster_ids = self.last_cluster_ids
 
             for label, cluster_id in enumerate(cluster_ids):
+
+                hardness = cb_values[label]
+
+                if isinstance(self, ClusterHardnessQueryByCommittee):
+                    # inverte o sinal do CB para representar a hardness
+                    hardness = -hardness
+
                 self.update_hardness(
                     cluster_id,
-                    cb_values[label],
+                    hardness,
                     label=label
                 )
 
@@ -1479,10 +1486,148 @@ class ClusterHardnessUncertainty(ClusterHardness):
 
         return False
 
+"""#### Cluster-Hardness + Query-by-Committee"""
+class ClusterHardnessQueryByCommittee(ClusterHardness):
+
+    def __init__(
+        self,
+        adaptive_threshold,
+        budget,
+        cluster_manager,
+        alpha=0.5,
+        qbc_weight=0.5
+    ):
+
+        super().__init__(
+            adaptive_threshold,
+            budget,
+            cluster_manager,
+            alpha
+        )
+
+        self.qbc_weight = qbc_weight
+        self.max_vote_entropy = (
+            -(2/3) * np.log2(2/3)
+            -(1/3) * np.log2(1/3)
+        )
+
+        self.last_hardness = None
+        self.last_disagreement = None
+        self.last_score = None
+    
+    def normalize_qbc(self, disagreement):
+        """
+        Normaliza o vote entropy para o intervalo [0, 1].
+        Para 3 classificadores binários, o máximo é H(2/3, 1/3).
+        """
+        return disagreement / self.max_vote_entropy
+
+
+    def normalize_hardness(self, hardness):
+        """
+        Normaliza o Cluster-Hardness Score para [0, 1].
+
+        GLOBAL:
+            tudo ok, CLS já está em [0, 1].
+
+        PER_LABEL:
+            hardness = -CB, portanto está em [-0.5, 0.5].
+            A transformação hardness + 0.5 leva para [0, 1].
+        """
+        if self.cluster_manager.mode == "global":
+            return hardness
+
+        return hardness + 0.5
+
+    def compute_score(self, hardness, disagreement):
+
+        qbc_norm = self.normalize_qbc(disagreement)
+        hard_norm = self.normalize_hardness(hardness)
+
+        return (
+            self.qbc_weight * qbc_norm
+            + (1 - self.qbc_weight) * hard_norm
+        )
+    
+    def query(
+        self,
+        x=None,
+        y_true=None,
+        y_pred=None,
+        probabilities=None,
+        committee_predictions=None,
+        committee_probabilities=None
+    ):
+
+        self.total_seen += 1
+
+        # orçamento esgotado
+        if self.total_queried >= self.budget_limit:
+            return False
+
+        # identifica o cluster antes de atualizar o clustering
+        cluster_info = self.cluster_manager.get_cluster(x)
+
+        # calcula o score de acordo com o modo
+        hardness = self.get_score(cluster_info)
+
+        # calcula a discordância do comitê
+        disagreement = compute_vote_entropy(committee_predictions)
+
+        # combina os scores
+        score = self.compute_score(hardness, disagreement)
+
+        # salva os scores usados na decisão
+        self.last_hardness = hardness
+        self.last_disagreement = disagreement
+        self.last_score = score
+
+        # GLOBAL:
+        if self.cluster_manager.mode == "global":
+            
+            # guarda o cluster usado na decisão
+            self.last_cluster_id = cluster_info
+            '''
+            print(
+                f"Seen={self.total_seen} | "
+                f"Cluster={cluster_info} | "
+                f"MeanHardness={hardness:.10f} | "
+                f"Disagreement={disagreement:.10f} | "
+                f"Score={score:.10f} | "
+                f"Threshold={self.adaptive_threshold.get_threshold():.10f}"
+            )
+            '''
+        # PER_LABEL:
+        else:
+            
+            # guarda os clusters usados na decisão
+            self.last_cluster_ids = cluster_info
+            '''
+            print(
+                f"Seen={self.total_seen} | "
+                f"Clusters={cluster_info} | "
+                f"MeanHardness={hardness:.10f} | "
+                f"Disagreement={disagreement:.10f} | "
+                f"Score={score:.10f} | "
+                f"Threshold={self.adaptive_threshold.get_threshold():.10f}"
+            )
+            '''
+        # atualiza o clustering usando somente X
+        self.cluster_manager.update(x)
+
+        threshold = self.adaptive_threshold.get_threshold()
+
+        if score >= threshold:
+
+            self.total_queried += 1
+
+            return True
+
+        return False
+
 """#### Bounds"""
 
 """##### Lower Bound -> sem consultas (budget = 0%)"""
-
 class NoQuery(ActiveLearningStrategy):
 
     def __init__(self):
@@ -1506,7 +1651,6 @@ class NoQuery(ActiveLearningStrategy):
         return False
 
 """##### Upper Bound -> aprendizado totalmente supervisionado (budget = 100%)"""
-
 class FullSupervision(ActiveLearningStrategy):
 
     def __init__(self):
@@ -1531,7 +1675,6 @@ class FullSupervision(ActiveLearningStrategy):
         return True
 
 """### Pool-based Active Learning"""
-
 class Pool:
 
     def __init__(self, pool_size):
@@ -1585,7 +1728,6 @@ class PoolBasedStrategy(ActiveLearningStrategy):
         raise NotImplementedError
 
 """#### Random"""
-
 class PoolRandomSampling(PoolBasedStrategy):
 
     def __init__(self, budget):
@@ -1617,7 +1759,6 @@ class PoolRandomSampling(PoolBasedStrategy):
         return indices
 
 """#### Uncertainty sampling"""
-
 class PoolUncertaintySampling(PoolBasedStrategy):
 
     def __init__(self, budget):
@@ -1657,7 +1798,6 @@ class PoolUncertaintySampling(PoolBasedStrategy):
         return selected
 
 """#### Query-by-committee"""
-
 class PoolQueryByCommittee(PoolBasedStrategy):
 
     def __init__(self, budget):
@@ -1700,7 +1840,6 @@ class PoolQueryByCommittee(PoolBasedStrategy):
         return selected
 
 """### Pool Cluster-Hardness Sampling (CHS)"""
-
 class PoolClusterHardness(PoolBasedStrategy):
 
     def __init__(
@@ -1878,7 +2017,7 @@ class PoolClusterHardness(PoolBasedStrategy):
 
                     self.update_hardness(
                         cluster_id,
-                        cb_values[label],
+                        hardness,
                         label=label
                     )
 
@@ -1956,7 +2095,6 @@ class PoolClusterHardness(PoolBasedStrategy):
         return selected
 
 """#### Pool Cluster-Hardness + Uncertainty Sampling"""
-
 class PoolClusterHardnessUncertainty(PoolClusterHardness):
 
     def __init__(
@@ -2024,8 +2162,116 @@ class PoolClusterHardnessUncertainty(PoolClusterHardness):
 
         return selected
 
-"""### Cálculo de budget por pool"""
+"""#### Pool Cluster-Hardness + Query-by-Committee"""
+class PoolClusterHardnessQueryByCommittee(PoolClusterHardness):
+    
+    def __init__(
+        self,
+        budget,
+        cluster_manager,
+        hardness,
+        alpha=0.5,
+        qbc_weight=0.5
+    ):
 
+        super().__init__(
+            budget=budget,
+            cluster_manager=cluster_manager,
+            hardness=hardness,
+            alpha=alpha
+        )
+
+        self.qbc_weight = qbc_weight
+        # Máximo do vote entropy para 3 classificadores binários
+        self.max_vote_entropy = (
+            -(2/3) * np.log2(2/3)
+            -(1/3) * np.log2(1/3)
+        )
+
+        self.last_hardness = None
+        self.last_disagreement = None
+        self.last_score = None
+    
+    def normalize_qbc(self, disagreement):
+        """
+        Normaliza o vote entropy para [0, 1].
+        """
+
+        return disagreement / self.max_vote_entropy
+
+    def normalize_hardness(self, hardness):
+        """
+        Normaliza o Cluster-Hardness Score para [0, 1].
+
+        GLOBAL:
+            CLS já está em [0, 1].
+
+        PER_LABEL:
+            hardness = -CB, portanto está em [-0.5, 0.5].
+            hardness + 0.5 -> [0, 1].
+        """
+
+        if self.cluster_manager.mode == "global":
+            return hardness
+
+        return hardness + 0.5
+    
+    def compute_score(self, hardness, disagreement):
+
+        qbc_norm = self.normalize_qbc(disagreement)
+        hard_norm = self.normalize_hardness(hardness)
+
+        return (
+            self.qbc_weight * qbc_norm
+            + (1 - self.qbc_weight) * hard_norm
+        )
+
+    def query_pool(self, pool):
+
+        remaining_budget = (
+            self.budget_limit - self.total_queried
+        )
+
+        if remaining_budget <= 0:
+            return []
+
+        scores = []
+
+        for inst in pool.instances:
+
+            # identifica o cluster da instância
+            #cluster_info = self.cluster_manager.get_cluster(inst["x"])
+
+            # Cluster-Hardness
+            hardness = self.get_score(inst["x"])
+
+            # QBC
+            disagreement = compute_vote_entropy(
+                inst["committee_predictions"]
+            )
+
+            # score combinado
+            score = self.compute_score(hardness, disagreement)
+
+            scores.append(score)
+
+        # ordenar do maior score para o menor
+        order = np.argsort(scores)[::-1]
+
+        k = min(
+            self.pool_budget,
+            remaining_budget,
+            len(order)
+        )
+
+        selected = order[:k]
+
+        self.total_seen += len(pool.instances)
+        self.total_queried += len(selected)
+
+        return selected
+
+"""### Cálculo de budget por pool"""
 def compute_pool_budget(strategy, n_instances, pool_size):
 
     strategy.budget_limit = int(strategy.budget * n_instances)
@@ -2307,7 +2553,15 @@ def run_experiment(
     # comitê para QBC
     committee = None
 
-    if isinstance(strategy, (QueryByCommittee, PoolQueryByCommittee)):
+    if isinstance(
+        strategy,
+        (
+            QueryByCommittee,
+            PoolQueryByCommittee,
+            ClusterHardnessQueryByCommittee,
+            PoolClusterHardnessQueryByCommittee
+        )
+    ):
         committee = Committee(
             committee_configs=committee_configs,
             n_labels=Y.shape[1],
@@ -2326,7 +2580,12 @@ def run_experiment(
 
     uses_committee = isinstance(
         strategy,
-        (QueryByCommittee, PoolQueryByCommittee)
+        (
+            QueryByCommittee,
+            PoolQueryByCommittee,
+            ClusterHardnessQueryByCommittee,
+            PoolClusterHardnessQueryByCommittee
+        )
     )
 
     uses_cluster_hardness = isinstance(
@@ -2399,9 +2658,21 @@ def run_experiment(
                     if cb_values is not None:
                         for label, cluster_id in enumerate(cluster_info):
 
+                            hardness_value = cb_values[label]
+
+                            if isinstance(
+                                strategy,
+                                (
+                                    ClusterHardnessQueryByCommittee, 
+                                    PoolClusterHardnessQueryByCommittee
+                                )
+                            ):
+                                # CB original: P(t(x)) - 0.5; invertido para alinhar maior valor à maior hardness
+                                hardness_value = -hardness_value
+
                             strategy.update_hardness(
                                 cluster_id,
-                                cb_values[label],
+                                hardness_value,
                                 label=label
                             )
                         
@@ -2440,21 +2711,14 @@ def run_experiment(
             )
 
     # inicialização do threshold adaptativo
-    if mode == "online" and isinstance(strategy, (UncertaintySampling, ClusterHardnessUncertainty)):
-
-        scores = []
-
-        for x in X_train:
-
-            probabilities = model.predict_proba(x)
-
-            score = compute_uncertainty(probabilities)
-
-            scores.append(score)
-
-        strategy.adaptive_threshold.initialize(scores)
-    
-    if mode == "online" and isinstance(strategy, QueryByCommittee):
+    # Cluster-Hardness + Query-by-Committee
+    if (
+        mode == "online"
+        and isinstance(
+            strategy,
+            ClusterHardnessQueryByCommittee
+        )
+    ):
 
         scores = []
 
@@ -2462,26 +2726,63 @@ def run_experiment(
 
             predictions = committee.predict_all(x)
 
-            score = compute_vote_entropy(predictions)
-
-            scores.append(score)
-
-        strategy.adaptive_threshold.initialize(scores)
-    
-    if mode == "online" and isinstance(strategy, ClusterHardnessUncertainty):
-        scores = []
-
-        for x in X_train:
             cluster_info = strategy.cluster_manager.get_cluster(x)
+
             hardness = strategy.get_score(cluster_info)
 
-            probabilities = model.predict_proba(x)
-            uncertainty = compute_uncertainty(probabilities)
+            disagreement = compute_vote_entropy(
+                predictions
+            )
 
-            score = strategy.compute_score(hardness, uncertainty)
+            score = strategy.compute_score(
+                hardness,
+                disagreement
+            )
+
             scores.append(score)
 
         if len(scores) > 0:
+
+            strategy.adaptive_threshold.initialize(scores)
+
+            print(
+                "ClusterHardness + QBC threshold inicial:",
+                strategy.adaptive_threshold.get_threshold()
+            )
+
+
+    # Cluster-Hardness + Uncertainty
+    elif (
+        mode == "online"
+        and isinstance(
+            strategy,
+            ClusterHardnessUncertainty
+        )
+    ):
+
+        scores = []
+
+        for x in X_train:
+
+            cluster_info = strategy.cluster_manager.get_cluster(x)
+
+            hardness = strategy.get_score(cluster_info)
+
+            probabilities = model.predict_proba(x)
+
+            uncertainty = compute_uncertainty(
+                probabilities
+            )
+
+            score = strategy.compute_score(
+                hardness,
+                uncertainty
+            )
+
+            scores.append(score)
+
+        if len(scores) > 0:
+
             strategy.adaptive_threshold.initialize(scores)
 
             print(
@@ -2489,16 +2790,88 @@ def run_experiment(
                 strategy.adaptive_threshold.get_threshold()
             )
 
-    elif mode == "online" and isinstance(strategy, ClusterHardness):
-        if strategy.cluster_manager.mode == "global":
-            scores = list(strategy.hardness.values())
-        else:
-            scores = []
-            for label_hardness in strategy.hardness.values():
-                scores.extend(label_hardness.values())
+
+    # Query-by-Committee
+    elif (
+        mode == "online"
+        and isinstance(
+            strategy,
+            QueryByCommittee
+        )
+    ):
+
+        scores = []
+
+        for x in X_train:
+
+            predictions = committee.predict_all(x)
+
+            score = compute_vote_entropy(
+                predictions
+            )
+
+            scores.append(score)
 
         if len(scores) > 0:
+
             strategy.adaptive_threshold.initialize(scores)
+
+    # Uncertainty Sampling
+    elif (
+        mode == "online"
+        and isinstance(
+            strategy,
+            UncertaintySampling
+        )
+    ):
+
+        scores = []
+
+        for x in X_train:
+
+            probabilities = model.predict_proba(x)
+
+            score = compute_uncertainty(
+                probabilities
+            )
+
+            scores.append(score)
+
+        if len(scores) > 0:
+
+            strategy.adaptive_threshold.initialize(scores)
+
+
+    # Cluster-Hardness
+    elif (
+        mode == "online"
+        and isinstance(
+            strategy,
+            ClusterHardness
+        )
+    ):
+
+        if strategy.cluster_manager.mode == "global":
+
+            scores = list(
+                strategy.hardness.values()
+            )
+
+        else:
+
+            scores = []
+
+            for label_hardness in strategy.hardness.values():
+
+                scores.extend(
+                    label_hardness.values()
+                )
+
+        if len(scores) > 0:
+
+            strategy.adaptive_threshold.initialize(
+                scores
+            )
 
             print(
                 "ClusterHardness threshold inicial:",
@@ -2563,7 +2936,13 @@ def run_experiment(
         if uses_committee:
             committee_predictions = committee.predict_all(x)
 
-            if mode == "online":
+            if (
+                mode == "online"
+                and not isinstance(
+                    strategy,
+                    ClusterHardnessQueryByCommittee
+                )
+            ):
                 score = compute_vote_entropy(committee_predictions)
                 block_scores.append(score)
         
@@ -3002,6 +3381,51 @@ for dataset_name in dataset_paths.keys():
                         ),
                         alpha=0.05,
                         uncertainty_weight=0.5
+                    ),
+
+                    "CHS+QBC_025": ClusterHardnessQueryByCommittee(
+                        adaptive_threshold=AdaptiveThreshold(
+                            block_size=block_size,
+                            budget=budget
+                        ),
+                        budget=budget,
+                        cluster_manager=ClusterManager(
+                            n_clusters=k,
+                            random_state=42,
+                            mode=cluster_mode
+                        ),
+                        alpha=0.05,
+                        qbc_weight=0.25
+                    ),
+
+                    "CHS+QBC_050": ClusterHardnessQueryByCommittee(
+                        adaptive_threshold=AdaptiveThreshold(
+                            block_size=block_size,
+                            budget=budget
+                        ),
+                        budget=budget,
+                        cluster_manager=ClusterManager(
+                            n_clusters=k,
+                            random_state=42,
+                            mode=cluster_mode
+                        ),
+                        alpha=0.05,
+                        qbc_weight=0.50
+                    ),
+
+                    "CHS+QBC_075": ClusterHardnessQueryByCommittee(
+                        adaptive_threshold=AdaptiveThreshold(
+                            block_size=block_size,
+                            budget=budget
+                        ),
+                        budget=budget,
+                        cluster_manager=ClusterManager(
+                            n_clusters=k,
+                            random_state=42,
+                            mode=cluster_mode
+                        ),
+                        alpha=0.05,
+                        qbc_weight=0.75
                     )
                 }
 
@@ -3076,7 +3500,6 @@ for dataset_name in dataset_paths.keys():
                         f"Mode={cluster_mode} | "
                         f"K={k} | Budget={budget}"
                     ) 
-
 
 all_results_pool = {}
 
@@ -3181,7 +3604,10 @@ for dataset_name in dataset_paths.keys():
 
                 pool_strategies = {
                     "PoolClusterHardness": PoolClusterHardness,
-                    "PoolClusterHardnessUncertainty": PoolClusterHardnessUncertainty
+                    "PoolClusterHardnessUncertainty": PoolClusterHardnessUncertainty,
+                    "PoolCHS+QBC_025": PoolClusterHardnessQueryByCommittee,
+                    "PoolCHS+QBC_050": PoolClusterHardnessQueryByCommittee,
+                    "PoolCHS+QBC_075": PoolClusterHardnessQueryByCommittee
                 }
 
                 for strategy_name, strategy_class in pool_strategies.items():
@@ -3222,7 +3648,7 @@ for dataset_name in dataset_paths.keys():
                                 alpha=0.05
                             )
 
-                        else:
+                        elif strategy_name == "PoolClusterHardnessUncertainty":
 
                             strategy = PoolClusterHardnessUncertainty(
                                 budget=budget,
@@ -3230,6 +3656,22 @@ for dataset_name in dataset_paths.keys():
                                 hardness=hardness,
                                 alpha=0.05,
                                 uncertainty_weight=0.5
+                            )
+
+                        else:
+
+                            qbc_weight = {
+                                "PoolCHS+QBC_025": 0.25,
+                                "PoolCHS+QBC_050": 0.50,
+                                "PoolCHS+QBC_075": 0.75
+                            }[strategy_name]
+
+                            strategy = PoolClusterHardnessQueryByCommittee(
+                                budget=budget,
+                                cluster_manager=cluster_manager,
+                                hardness=hardness,
+                                alpha=0.05,
+                                qbc_weight=qbc_weight
                             )
 
                         results = run_experiment(
