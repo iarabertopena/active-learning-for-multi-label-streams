@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 #import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
@@ -1357,11 +1358,14 @@ class ClusterHardness(ActiveLearningStrategy):
 
             for label, cluster_id in enumerate(cluster_ids):
 
+                '''
                 hardness = cb_values[label]
 
                 if isinstance(self, ClusterHardnessQueryByCommittee):
                     # inverte o sinal do CB para representar a hardness
                     hardness = -hardness
+                '''
+                hardness = -cb_values[label]
 
                 self.update_hardness(
                     cluster_id,
@@ -2657,7 +2661,7 @@ def run_experiment(
 
                     if cb_values is not None:
                         for label, cluster_id in enumerate(cluster_info):
-
+                            '''
                             hardness_value = cb_values[label]
 
                             if isinstance(
@@ -2669,6 +2673,9 @@ def run_experiment(
                             ):
                                 # CB original: P(t(x)) - 0.5; invertido para alinhar maior valor à maior hardness
                                 hardness_value = -hardness_value
+                            '''
+
+                            hardness_value = -cb_values[label]
 
                             strategy.update_hardness(
                                 cluster_id,
@@ -2890,6 +2897,9 @@ def run_experiment(
     exact_match_scores = []
     f1_scores = []
 
+    # análise da correlação entre hardness e erro
+    hardness_error_rows = []
+
     # histórico opara gráficos
     history = {
         "progress": [],
@@ -2961,6 +2971,32 @@ def run_experiment(
         hamming_scores.append(ham)
         exact_match_scores.append(exact)
         f1_scores.append(f1)
+
+        # Registra hardness bruto e erro prequential por instância
+        if uses_cluster_hardness:
+
+            if mode == "online":
+                cluster_info = strategy.cluster_manager.get_cluster(x)
+                hardness = strategy.get_score(cluster_info)
+            else:
+                hardness = strategy.get_score(x)
+
+            #hardness_corr_scores.append(hardness)
+            #error_corr_scores.append(ham)
+
+            hardness_error_rows.append({
+                "Dataset": dataset_name,
+                "Strategy": type(strategy).__name__,
+                "Mode": mode,
+                "Budget": getattr(strategy, "budget", None),
+                "Cluster Mode": strategy.cluster_manager.mode,
+                "K": strategy.cluster_manager.n_clusters,
+                "QBC Weight": getattr(strategy, "qbc_weight", None),
+                "Uncertainty Weight": getattr(strategy, "uncertainty_weight", None),
+                "Stream Index": i,
+                "Hardness": hardness,
+                "Hamming Loss": ham
+            })
 
         # detector de drift
         adwin.add_element(ham)
@@ -3134,6 +3170,63 @@ def run_experiment(
         if strategy.total_seen > 0
         else 0
     )
+
+    # Correlação entre Instance Hardness e erro
+    if hardness_error_rows:
+
+        hardness_df = pd.DataFrame(hardness_error_rows)
+
+        rho_spearman, p_value = spearmanr(
+            hardness_df["Hardness"],
+            hardness_df["Hamming Loss"],
+            nan_policy="omit"
+        )
+
+        # Salvar dados por instância
+        instances_file = RESULTS_DIR / "hardness_error_instances.csv"
+
+        hardness_df.to_csv(
+            instances_file,
+            mode="a" if instances_file.exists() else "w",
+            header=not instances_file.exists(),
+            index=False
+        )
+
+        # Salvar resumo da correlação
+        summary_file = RESULTS_DIR / "hardness_error_summary.csv"
+
+        summary_df = pd.DataFrame([{
+            "Dataset": dataset_name,
+            "Strategy": type(strategy).__name__,
+            "Mode": mode,
+            "Budget": getattr(strategy, "budget", None),
+            "Cluster Mode": strategy.cluster_manager.mode,
+            "K": strategy.cluster_manager.n_clusters,
+            "QBC Weight": getattr(strategy, "qbc_weight", None),
+            "Uncertainty Weight": getattr(strategy, "uncertainty_weight", None),
+            "N Instances": len(hardness_df),
+            "Spearman": rho_spearman,
+            "P-value": p_value
+        }])
+
+        summary_df.to_csv(
+            summary_file,
+            mode="a" if summary_file.exists() else "w",
+            header=not summary_file.exists(),
+            index=False
+        )
+
+        print("\nCorrelação entre Instance Hardness e Hamming Loss")
+        print(f"Spearman: {rho_spearman:.4f}")
+        print(f"p-valor: {p_value:.6f}")
+        print(f"Instâncias analisadas: {len(hardness_df)}")
+        print(f"Dados salvos em: {RESULTS_DIR}")
+
+    else:
+        rho_spearman = np.nan
+        p_value = np.nan
+
+        print("\nNão há instâncias suficientes para calcular a correlação.")
 
     # resultados finais
     results = {
