@@ -2,7 +2,7 @@
 
 This repository contains the implementation of an undergraduate research project on **Online Multi-Label Classification (OMLC)**, developed at the Institute of Mathematical and Computer Sciences, University of São Paulo (ICMC-USP), Brazil.
 
-The project is funded by the São Paulo Research Foundation (FAPESP, grant **2026/06454-3**) and supervised by **Prof. Dr. Ricardo Cerri**.
+The project is funded by the São Paulo Research Foundation (FAPESP, grant **2026/06454-3**) and supervised by **Prof. Dr. Ricardo Cerri** and **Prof. Dr. Felipe Kenji**.
 
 > **Project status:** Ongoing research. Experimental results are preliminary, and the implemented strategies are still being developed and evaluated.
 
