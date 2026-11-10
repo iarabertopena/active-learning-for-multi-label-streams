@@ -59,25 +59,6 @@ The experimental evaluation includes real-world and synthetic multi-label datase
 - Active Learning
 - Multi-Label Classification
 
-## Getting Started
-
-Clone the repository:
-
-```bash
-git clone https://github.com/iarabertopena/active-learning-for-multi-label-streams.git
-cd active-learning-for-multi-label-streams
-```
-
-Install the dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-The source code is available in `src/`, while notebooks and experimental outputs are organized in `notebooks/` and `results/`, respectively.
-
-Please refer to the source files and notebooks for the current experiment configurations and execution details.
-
 ## Research Context
 
 This repository is part of an ongoing undergraduate research project in Machine Learning, focusing on Active Learning for Online Multi-Label Classification and annotation-efficient learning from data streams.
